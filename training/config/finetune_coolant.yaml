@@ -1,0 +1,229 @@
+defaults:
+  - default_dataset.yaml
+
+exp_name: finetune_coolant_single_scene
+img_size: 518
+num_workers: 4
+seed_value: 42
+accum_steps: 1
+patch_size: 14
+val_epoch_freq: 1  # Validate every epoch for single scene
+max_img_per_gpu: 10  # 10 consecutive frames per batch
+
+limit_train_batches: 100  # Small dataset, fewer batches per epoch
+limit_val_batches: 20
+
+data:
+  train:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      debug: False
+      repeat_batch: False
+      fix_img_num: 10  # Fixed 10 consecutive frames
+      fix_aspect_ratio: 1.0
+      load_track: False
+      track_num: 1024
+      training: True
+      inside_random: True
+      get_nearby: False  # Don't use nearby sampling, random consecutive frames
+      load_depth: True
+      img_nums: [10, 10]  # Always use 10 frames
+      max_img_per_gpu: ${max_img_per_gpu}
+      allow_duplicate_img: False  # No duplicates in consecutive frames
+      
+      rescale: True  # Rescale to 518
+      rescale_aug: True
+      landscape_check: False
+      
+      augs:
+        cojitter: True
+        cojitter_ratio: 0.3
+        scales: [0.8, 1.0]  # Random scale augmentation
+        aspects: [1.0, 1.0]  # Keep square aspect ratio
+        color_jitter:
+          brightness: 0.4
+          contrast: 0.4
+          saturation: 0.4
+          hue: 0.1
+          p: 0.8
+        gray_scale: True
+        gau_blur: False
+        
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: data.datasets.coolant.CoolantDataset
+          split: train
+          COOLANT_DIR: /workspace/Coolant_dataset/lidar-depth-poses
+          min_num_images: 30  # Need at least 30 frames for training
+          len_train: 1000  # Iterate 1000 times per epoch
+          
+  val:
+    _target_: data.dynamic_dataloader.DynamicTorchDataset
+    num_workers: ${num_workers}
+    max_img_per_gpu: ${max_img_per_gpu}
+    common_config:
+      img_size: ${img_size}
+      patch_size: ${patch_size}
+      debug: False
+      fix_img_num: 10
+      fix_aspect_ratio: 1.0
+      load_track: False
+      track_num: 1024
+      training: False
+      inside_random: False
+      get_nearby: False
+      load_depth: True
+      img_nums: [10, 10]
+      allow_duplicate_img: False
+      
+      rescale: True
+      rescale_aug: False  # No augmentation for validation
+      landscape_check: False
+      
+      augs:
+        cojitter: False
+        cojitter_ratio: 0.5
+        scales: null
+        aspects: [1.0, 1.0]
+        color_jitter: null
+        gray_scale: False
+        gau_blur: False
+        
+    dataset:
+      _target_: data.composed_dataset.ComposedDataset
+      dataset_configs:
+        - _target_: data.datasets.coolant.CoolantDataset
+          split: test
+          COOLANT_DIR: /workspace/Coolant_dataset/lidar-depth-poses
+          min_num_images: 30
+          len_test: 200
+
+
+logging:
+  log_dir: logs
+  log_visuals: True  # Enable visual logging for single scene
+  log_freq: 10  # Log every 10 batches
+  log_level_primary: INFO
+  log_level_secondary: WARNING
+  all_ranks: False
+  tensorboard_writer:
+    _target_: train_utils.tb_writer.TensorBoardLogger
+    path: ${logging.log_dir}/tensorboard
+  scalar_keys_to_log:
+    train:
+      keys_to_log:
+        - loss_objective
+        - loss_camera
+        - loss_T
+        - loss_R
+        - loss_FL
+        - loss_conf_depth
+        - loss_reg_depth
+        - loss_grad_depth
+    val:
+      keys_to_log:
+        - loss_objective
+        - loss_camera
+        - loss_T
+        - loss_R
+        - loss_FL
+        - loss_conf_depth
+        - loss_reg_depth
+        - loss_grad_depth
+
+
+checkpoint:
+  save_dir: logs/${exp_name}/ckpts
+  save_freq: 5  # Save every 5 epochs
+  resume_checkpoint_path: null  # Set to pretrained VGGT checkpoint for finetuning
+  strict: False  # Allow partial loading for finetuning
+
+
+loss:
+  _target_: loss.MultitaskLoss
+  camera: 
+    weight: 5.0
+    loss_type: "l1"
+  depth:
+    weight: 1.0
+    gradient_loss_fn: "grad" 
+    valid_range: 0.98
+  point: null
+  track: null   
+
+
+optim:
+  param_group_modifiers: False
+
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-5  # Lower learning rate for finetuning
+    weight_decay: 0.01  # Lower weight decay
+
+  frozen_module_names: []  # Don't freeze anything for single scene finetuning
+
+  amp:
+    enabled: True
+    amp_dtype: bfloat16
+    
+  gradient_clip:
+    _target_: train_utils.gradient_clip.GradientClipper
+    configs:
+      - module_name: ["aggregator"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["depth"]
+        max_norm: 1.0
+        norm_type: 2
+      - module_name: ["camera"]
+        max_norm: 1.0
+        norm_type: 2
+        
+  options:
+    lr:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.CompositeParamScheduler
+          schedulers:
+            - _target_: fvcore.common.param_scheduler.LinearParamScheduler
+              start_value: 1e-6
+              end_value: 1e-5
+            - _target_: fvcore.common.param_scheduler.CosineParamScheduler
+              start_value: 1e-5
+              end_value: 1e-7
+          lengths: [0.1, 0.9]  # Shorter warmup for finetuning
+          interval_scaling: ['rescaled', 'rescaled']
+    weight_decay:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: 0.01
+
+
+max_epochs: 50  # More epochs for single scene overfitting
+
+model:
+  _target_: vggt.models.vggt.VGGT
+  enable_camera: True
+  enable_depth: True
+  enable_point: False
+  enable_track: False
+
+
+distributed:
+  backend: nccl
+  comms_dtype: None
+  find_unused_parameters: False
+  timeout_mins: 30
+  gradient_as_bucket_view: True
+  bucket_cap_mb: 25
+  broadcast_buffers: True
+
+cuda:
+    cudnn_deterministic: False
+    cudnn_benchmark: True  # Enable for faster training
+    allow_tf32: True
+
