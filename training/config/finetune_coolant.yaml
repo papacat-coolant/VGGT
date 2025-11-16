@@ -1,5 +1,6 @@
 defaults:
   - default_dataset.yaml
+  - _self_
 
 exp_name: finetune_coolant_single_scene
 img_size: 518
@@ -106,7 +107,7 @@ data:
 
 logging:
   log_dir: logs
-  log_visuals: True  # Enable visual logging for single scene
+  log_visuals: False  # Enable visual logging for single scene
   log_freq: 10  # Log every 10 batches
   log_level_primary: INFO
   log_level_secondary: WARNING
@@ -140,7 +141,7 @@ logging:
 checkpoint:
   save_dir: logs/${exp_name}/ckpts
   save_freq: 5  # Save every 5 epochs
-  resume_checkpoint_path: null  # Set to pretrained VGGT checkpoint for finetuning
+  resume_checkpoint_path: /workspace/vggt/checkpoints/model.pt  # Set to pretrained VGGT checkpoint for finetuning
   strict: False  # Allow partial loading for finetuning
 
 
@@ -163,7 +164,9 @@ optim:
   optimizer:
     _target_: torch.optim.AdamW
     lr: 1e-5  # Lower learning rate for finetuning
-    weight_decay: 0.01  # Lower weight decay
+    weight_decay: 0.001  # Lower weight decay
+    # NOTE: bias and normalization layer parameters automatically get weight_decay=0.0
+    # This is handled in train_utils/optimizer.py::construct_optimizer()
 
   frozen_module_names: []  # Don't freeze anything for single scene finetuning
 

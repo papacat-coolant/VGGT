@@ -325,6 +325,7 @@ class Trainer:
 
         checkpoint_content = {
             "prev_epoch": epoch,
+            "epoch": epoch,  # Also save as "epoch" for resume compatibility
             "steps": self.steps,
             "time_elapsed": self.time_elapsed_meter.val,
             "optimizer": [optim.optimizer.state_dict() for optim in self.optims],
@@ -716,7 +717,6 @@ class Trainer:
     def _process_batch(self, batch: Mapping):      
         if self.data_conf.train.common_config.repeat_batch:
             batch = self._apply_batch_repetition(batch)
-        
         # Normalize camera extrinsics and points. The function returns new tensors.
         normalized_extrinsics, normalized_cam_points, normalized_world_points, normalized_depths = \
             normalize_camera_extrinsics_and_points_batch(

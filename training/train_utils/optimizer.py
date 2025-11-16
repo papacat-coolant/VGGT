@@ -61,6 +61,48 @@ class OptimizerWrapper:
 # -----------------------------------------------------------------------------
 
 
+def separate_weight_decay_params(named_parameters: Dict[str, Tensor], 
+                                  model: nn.Module) -> Tuple[List[Tensor], List[Tensor]]:
+    """
+    Separate parameters into two groups:
+    1. Parameters that should have weight decay (weights)
+    2. Parameters that should NOT have weight decay (biases and norms)
+    
+    Returns:
+        (decay_params, no_decay_params)
+    """
+    decay = []
+    no_decay = []
+    
+    # Get all normalization layer types
+    norm_types = (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d,
+                  nn.GroupNorm, nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d)
+    
+    # Create a mapping of parameter names to their parent modules
+    param_to_module = {}
+    for module_name, module in model.named_modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            full_param_name = get_full_parameter_name(module_name, param_name)
+            param_to_module[full_param_name] = module
+    
+    # Classify parameters
+    for param_name, param in named_parameters.items():
+        # Skip weight decay for:
+        # 1. Any parameter named 'bias'
+        # 2. Any parameter from normalization layers
+        if param_name.endswith('.bias'):
+            no_decay.append(param)
+            logging.info(f"No weight decay: {param_name} (bias)")
+        elif param_name in param_to_module and isinstance(param_to_module[param_name], norm_types):
+            no_decay.append(param)
+            logging.info(f"No weight decay: {param_name} (norm layer)")
+        else:
+            decay.append(param)
+    
+    logging.info(f"Weight decay groups - decay: {len(decay)}, no_decay: {len(no_decay)}")
+    return decay, no_decay
+
+
 def validate_param_group_params(param_groups: List[Dict], model: nn.Module):
     """Ensure param groups are non-overlapping and include all model params."""
 
@@ -220,10 +262,28 @@ def construct_optimizer(model: nn.Module,
     module_cls_to_all_param_names = get_module_cls_to_param_names(model)
 
     # ──────────────────────────────────────────────────────────────────
-    # No scheduler case – simple & fast
+    # No scheduler case – but still separate weight decay groups
     # ──────────────────────────────────────────────────────────────────
     if not options_conf:
-        optimizer = hydra.utils.instantiate(optimizer_conf, named_parameters.values())
+        # Check if weight_decay is set in optimizer config
+        weight_decay = optimizer_conf.get('weight_decay', 0.0)
+        
+        if weight_decay > 0:
+            # Separate parameters into decay/no_decay groups
+            decay_params, no_decay_params = separate_weight_decay_params(named_parameters, model)
+            
+            # Create param groups with different weight decay settings
+            param_groups = [
+                {'params': decay_params, 'weight_decay': weight_decay},
+                {'params': no_decay_params, 'weight_decay': 0.0}
+            ]
+            optimizer = hydra.utils.instantiate(optimizer_conf, param_groups)
+            logging.info(f"Created optimizer with separated weight decay groups: "
+                        f"{len(decay_params)} decay, {len(no_decay_params)} no_decay")
+        else:
+            # No weight decay, treat all parameters the same
+            optimizer = hydra.utils.instantiate(optimizer_conf, named_parameters.values())
+        
         return OptimizerWrapper(optimizer)
 
     # ──────────────────────────────────────────────────────────────────
@@ -251,6 +311,43 @@ def construct_optimizer(model: nn.Module,
     schedulers, param_groups = map_scheduler_cfgs_to_param_groups(
         all_scheduler_cfgs, named_parameters
     )
+    
+    # Apply automatic weight decay separation to each param group
+    # This refines the groups further based on bias/norm detection
+    weight_decay = optimizer_conf.get('weight_decay', 0.0)
+    if weight_decay > 0:
+        refined_param_groups = []
+        refined_schedulers = []
+        
+        for i, pg in enumerate(param_groups):
+            # Use id() to compare tensor objects (can't use 'in' directly)
+            pg_param_ids = {id(p) for p in pg['params']}
+            params_dict = {name: param for name, param in named_parameters.items() 
+                          if id(param) in pg_param_ids}
+            decay_params, no_decay_params = separate_weight_decay_params(params_dict, model)
+            
+            if decay_params:
+                refined_pg = pg.copy()
+                refined_pg['params'] = decay_params
+                refined_param_groups.append(refined_pg)
+                refined_schedulers.append(schedulers[i])
+            
+            if no_decay_params:
+                refined_pg = pg.copy()
+                refined_pg['params'] = no_decay_params
+                # Override weight_decay to 0 for bias/norm params
+                # This works even with schedulers because the base value is 0
+                refined_pg['weight_decay'] = 0.0
+                refined_param_groups.append(refined_pg)
+                # Copy scheduler but override weight_decay scheduler to constant 0
+                refined_sched = schedulers[i].copy()
+                if 'weight_decay' in refined_sched:
+                    refined_sched['weight_decay'] = lambda x: 0.0
+                refined_schedulers.append(refined_sched)
+        
+        param_groups = refined_param_groups
+        schedulers = refined_schedulers
+        logging.info(f"Refined param groups with weight decay separation: {len(param_groups)} groups")
 
     if validate_param_groups:
         validate_param_group_params(param_groups, model)

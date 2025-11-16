@@ -191,7 +191,7 @@ def viser_wrapper(
 
             # Add the frustum
             frustum_cam = server.scene.add_camera_frustum(
-                f"frame_{img_id}/frustum", fov=fov, aspect=w / h, scale=0.05, image=img, line_width=1.0
+                f"frame_{img_id}/frustum", fov=fov, aspect=w / h, scale=0.05, image=img
             )
             frustums.append(frustum_cam)
             attach_callback(frustum_cam, frame_axis)

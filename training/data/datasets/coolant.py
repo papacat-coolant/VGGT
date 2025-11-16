@@ -172,6 +172,14 @@ class CoolantDataset(BaseDataset):
         """
         if self.inside_random:
             seq_index = random.randint(0, self.sequence_list_len - 1)
+        else:
+            # When not using inside_random, wrap seq_index to valid range
+            # This handles cases where dataset length > number of sequences
+            # (e.g., len_test=200 but only 1 sequence available)
+            if seq_index is not None:
+                seq_index = seq_index % self.sequence_list_len
+            else:
+                seq_index = 0
             
         if seq_name is None:
             seq_name = self.sequence_list[seq_index]
@@ -236,9 +244,7 @@ class CoolantDataset(BaseDataset):
             
             # Convert cam_from_world (3, 4) to full extrinsic matrix (4, 4)
             # cam_from_world transforms world coords to camera coords
-            extri_opencv = np.eye(4, dtype=np.float32)
-            extri_opencv[:3, :] = cam_from_world
-
+            extri_opencv = cam_from_world
             intri_opencv = intri_opencv.astype(np.float32)
 
             (

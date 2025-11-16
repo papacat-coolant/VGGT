@@ -12,10 +12,17 @@ import torch
 def get_machine_local_and_dist_rank():
     """
     Get the distributed and local rank of the current gpu.
+    Returns (0, 0) for single GPU / non-distributed training.
     """
-    local_rank = int(os.environ.get("LOCAL_RANK", None))
-    distributed_rank = int(os.environ.get("RANK", None))
-    assert (
-        local_rank is not None and distributed_rank is not None
-    ), "Please the set the RANK and LOCAL_RANK environment variables."
+    local_rank = os.environ.get("LOCAL_RANK", "0")
+    distributed_rank = os.environ.get("RANK", "0")
+    
+    try:
+        local_rank = int(local_rank)
+        distributed_rank = int(distributed_rank)
+    except (ValueError, TypeError):
+        # Default to single GPU training
+        local_rank = 0
+        distributed_rank = 0
+    
     return local_rank, distributed_rank

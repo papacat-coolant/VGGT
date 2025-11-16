@@ -7,31 +7,23 @@ cd "$(dirname "$0")"
 # Set PYTHONPATH
 export PYTHONPATH=/workspace/vggt:/workspace/vggt/training:$PYTHONPATH
 
-# Configuration
-CONFIG="training/config/finetune_coolant.yaml"
-PRETRAINED_CKPT="${1:-/path/to/pretrained/vggt/checkpoint.pth}"  # Optional: pass checkpoint path as first argument
-
 # Create log directory
 mkdir -p logs/finetune_coolant_single_scene
 
 echo "=============================================="
 echo "Finetuning VGGT on Coolant Single Scene"
 echo "=============================================="
-echo "Config: $CONFIG"
+echo "Config: training/config/finetune_coolant.yaml"
 echo "Data: /workspace/Coolant_dataset/lidar-depth-poses"
 echo "Image size: 518x518"
 echo "Frames per batch: 10 consecutive frames"
-echo "Pretrained checkpoint: $PRETRAINED_CKPT"
 echo "=============================================="
 echo ""
 
-# Run training
-python3 training/train.py \
-    --config-name finetune_coolant \
-    checkpoint.resume_checkpoint_path="$PRETRAINED_CKPT" \
-    "$@"
-
-echo ""
-echo "Training completed!"
-echo "Logs saved to: logs/finetune_coolant_single_scene/"
+# Run training (checkpoint path is set in config file)
+# To resume training:
+# 1. Automatic resume: Set resume_checkpoint_path to null in config, 
+#    and it will auto-resume from logs/finetune_coolant_single_scene/ckpts/checkpoint.pt
+# 2. Manual resume: Set resume_checkpoint_path to your checkpoint file path in config
+torchrun --nproc_per_node=1 training/launch.py --config finetune_coolant
 
